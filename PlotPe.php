@@ -12,6 +12,7 @@ apiversion=10
 		
 class Plot implements Plugin{
 	private $api;
+	private $database;
 	public function __construct(ServerAPI $api, $server = false){
 		$this->api = $api;
 	}
@@ -32,14 +33,18 @@ class Plot implements Plugin{
 			'RoadBlockId' => 5,
 		));
 		$this->config = $this->api->plugin->readYAML($this->path . "config.yml");
-		$this->plotsdata = array();
-		if(file_exists($this->path . 'plots.data')){
-			$this->plotsdata = json_decode(file_get_contents($this->path . 'plots.data'), true);
-		}
-		$this->players = array();
-		if(file_exists($this->path . 'players.data')){
-			$this->players = json_decode(file_get_contents($this->path . 'players.data'), true);
-		}
+		$this->database = new SQLite3($this->api->plugin->configPath($this) . 'database.db');
+		$this->database->exec(
+			"CREATE TABLE IF NOT EXISTS plots (
+			id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+			pid INTEGER,
+			owner TEXT,
+			helpers TEXT,
+			x1 INTEGER,
+			z1 INTEGER,
+			x2 INTEGER,
+			z2 INTEGER
+		)");
 		$this->numberofworlds = 0;
 		for($i = 1;;$i++){
 			if(file_exists(DATA_PATH . 'worlds/plotworld'.$i.'/level.pmf')){
@@ -165,11 +170,6 @@ class Plot implements Plugin{
 			}
 			$z = ($z + 2 + $this->config['PlotSize'] + $this->config['RoadSize']);
 		}
-		foreach($plots as $key => $val){
-			$plots[$key]['owner'] = false;
-			$plots[$key]['members'] = array();
-		}
-		
 		$this->plottemplate = $plots;
 	}
 	
@@ -184,127 +184,138 @@ class Plot implements Plugin{
 					$output = "You can only use this command in the console";
 				}
 				break;
+				
 			case 'claim':
-				if(isset($this->plotsdata[$issuer->level->getName()])){ 
-					if(isset($this->players[$iusername])){
-						$output = "You already have a plot, it's in the world:".$this->players[$iusername]['level'].' and has the plotid: '.$this->players[$iusername]['plotid']."\n";
-						$output .= 'You can use: /plot home to teleport to your plot';
-						break;
-					}
-					$x = ceil($issuer->entity->x - 0.5);
-					$z = ceil($issuer->entity->z - 0.5);
-					$level = $issuer->level->getName();
-					$plots = $this->plotsdata[$level];
-					$in_plot = false; 
-					foreach($plots as $key => $val){
-						if($val['pos'][0][0] <= $x and $x <= $val['pos'][1][0] and $val['pos'][1][0] <= $z and $z <= $val['pos'][1][1]){
-							if($val['owner'] === false){
-								$this->plotsdata[$level][$key]['owner'] = $iusername;
-								$this->players[$iusername] = array('level' => $level, 'plotid' => $key);
-								file_put_contents($this->path.'players.data', json_encode($this->players));
-								file_put_contents($this->path.'plots.data', json_encode($this->plotsdata));
-								$output = 'You are now the owner of this plot with id: '.$key.' in world: '.$level;
-								break;
-							}else{
-								$output = 'The owner of this plot is '.$val['owner'];
-								break;
-							}
-						}
-					}
+				$x = $issuer->entity->x;
+				$z = $issuer->entity->z;
+				$level = $issuer->level->getName();
+				$plot = $this->getPlotByPos($x, $z, $level);
+				if($plot === false){
+					$output = "You need to stand in a plot";
+					break;
+				}
+				$plot = $plot[0];
+				if($plot['owner'] != ''){
+					$output = "This plot is already claimed by somebody";
+					break;
+				}
+				$id = $plot['id'];
+				$sql = "UPDATE plots SET owner = $iusername WHERE id = $id;";
+				$this->database->exec($sql);
+				$this->tpToPlot($plot, $issuer);
+				$output = 'You are now the owner of this plot with id: '.$plot['pid'].' in world: '.$level;
+				break;
+				
+			case 'home':
+				$plot = $this->getPlotByOwner($iusername);
+				if($plot === false){
+					$output = "You don't have a plot, create one with /plot auto or /plot claim";
+					break;
+				}
+				$plot = $plot[0];
+				$id = 0;
+				if(isset($args[1]) and is_numeric($args[1])){
+					$id = $args[1] - 1;
+				}
+				$this->tpToPlot($plot[$id], $issuer);
+				$output = 'You have been teleported to your plot with id:'.($id + 1);
+				break;
+				
+			case 'auto':
+				$plot = $this->getPlotByOwner('');
+				if($plot === false){
+					$output = 'Their are no available plots anymore';
+					break;
+				}
+				$plot = $plot[0];
+				$id = $plot['id'];
+				$sql = "UPDATE plots SET owner = $iusername WHERE id = $id;";
+				$this->database->exec($sql);
+				$this->tpToPlot($plot, $issuer);
+				$output = 'You auto-claimed a plot with id:'.$plot['pid'].' in world:'.$level;
+				break;
+				
+			case 'list':
+				$plots = $this->getPlotByOwner($iusername);
+				if($plots === false){
+					$output = "You don't have a plot, create one with /plot auto or /plot claim";
+					break;
+				}
+				$output = '==========[Your Plots]==========';
+				foreach($plots as $key => $val){
+					$output .= ''.($key + 1).'. id:'.$val['pid'].' world:'.$val['level']."\n";
+				}
+				break;
+				
+			case 'add':
+				if(!isset($args[1])){
+					$output = 'Usage: /plot add <player>';
+					break;
+				}
+				$player = strtolower($args[0]);
+				$plot = $this->getPlotByPos($issuer->entity->x, $issuer->entity->z, $issuer->level->getName());
+				if($plot === false){
 					$output = 'You need to stand in a plot';
 					break;
-					
 				}
-				$output = 'Their are no plots in this world';
-				break;
-			case 'home':
-				if(isset($this->players[$iusername])){
-					$level = $this->players[$iusername]['level'];
-					$id = $this->players[$iusername]['plotid'];
-					$middle = $this->config['PlotSize'] / 2;
-					$x = $this->plotsdata[$level][$id]['pos'][0][0] + $middle;
-					$z = $this->plotsdata[$level][$id]['pos'][0][1] + $middle;
-					$issuer->teleport(new Vector3($x, 27, $z));
-					$output = 'You have been teleported to your plot';
+				$plot = $plot[0];
+				if($plot['owner'] != $iusername){
+					$output = "You're not the owner of this plot";
+					break;
+				}
+				if(in_array($player, explode(',',$plot['helpers']))){
+					$output = ''.$player.' was already a helper of this plot';
+					break;
+				}
+				$id = $plot['id'];
+				if($plot['helpers'] == ''){
+					$helpers = $player;
 				}else{
-					$output = "You don't have a plot, create one with /plot auto or /plot claim";
+					$helpers = $plot['helpers'].','.$player;
 				}
+				$sql = "UPDATE plots SET owner = $helpers WHERE id = $id;";
+				$this->database->exec($sql);
+				$output = ''.$player.' is now a helper of this plot';
 				break;
-			case 'auto':
-				if(isset($this->players[$iusername])){
-					$output = "You already have a plot, it's in the world:".$this->players[$iusername]['level'].' and has the plotid: '.$this->players[$iusername]['plotid']."\n";
-					$output .= 'You can use: /plot home to teleport to your plot';
-					break;
-				}
-				foreach($this->plotsdata as $key => $val){
-					foreach($val as $key2 => $val2){
-						if($val2['owner'] === false){
-							$this->plotsdata[$key][$key2]['owner'] = $iusername;
-							$this->players[$iusername] = array('level' => $key, 'plotid' => $key2);
-							$middle = $this->config['PlotSize'] / 2;
-							$x = $val2[$key][$key2]['pos'][0][0] + $middle;
-							$z = $val2[$key][$key2]['pos'][0][1] + $middle;
-							$issuer->teleport(new Vector3($x, 27, $z));
-							file_put_contents($this->path.'players.data', json_encode($this->players));
-							file_put_contents($this->path.'plots.data', json_encode($this->plotsdata));
-							$output = 'You are now the owner of this plot with id: '.$key2.' in world: '.$key;
-							return $output;
-						}
-					}
-				}
-				$output = 'Their are no available plots anymore';
-				break;
-			case 'addmember':
-				if(!isset($args[0])){
-					$output = 'Usage: /plot addmember <player>';
+				
+			case 'remove':
+				if(!isset($args[1])){
+					$output = 'Usage: /plot remove <player>';
 					break;
 				}
 				$player = strtolower($args[0]);
-				if(!isset($this->players[$iusername])){
-					$output = "You don't have a plot";
+				$plot = $this->getPlotByPos($issuer->entity->x, $issuer->entity->z, $issuer->level->getName());
+				if($plot === false){
+					$output = 'You need to stand in a plot';
 					break;
 				}
-				$level = $this->players[$iusername]['level'];
-				$id = $this->players[$iusername]['plotid'];
-				if(in_array($player, $this->plotsdata[$level][$id]['members'])){
-					$output = $player.' is already a member of your plot';
+				$plot = $plot[0];
+				if($plot['owner'] != $iusername){
+					$output = "You're not the owner of this plot";
 					break;
 				}
-				array_push($player, $this->plotsdata[$level][$id]['members']);
-				file_put_contents($this->path.'plots.data', json_encode($this->plotsdata));
-				$output = $player.' is now a member of your plot';
-				break;
-			case 'removemember':
-				if(!isset($args[0])){
-					$output = 'Usage: /plot removemember <player>';
-					break;
+				$helpers = explode(',',$plot['helpers']);
+				if($key = array_search($player, $helpers)){
+					unset($helpers[$key]);
+					$helpers = implode(',', $helpers);
+					$id = $plot['id'];
+					$sql = "UPDATE plots SET owner = $helpers WHERE id = $id;";
+					$this->database->exec($sql);
+					$output = $player.' is no helper of this plot anymore';
+				}else{
+					$output = $player.' is no helper of this plot';
 				}
-				$player = strtolower($args[0]);
-				if(!isset($this->players[$iusername])){
-					$output = "You don't have a plot";
-					break;
-				}
-				$level = $this->players[$iusername]['level'];
-				$id = $this->players[$iusername]['plotid'];
-				$key = array_search($player, $this->plotsdata[$level][$id]['members']);
-				if($key === false){
-					$output = $player." isn't a member of your plot";
-					break;
-				}
-				unset($this->plotsdata[$level][$id]['members'][$key]);
-				file_put_contents($this->path.'plots.data', json_encode($this->plotsdata));
-				$output = $player.' is now a member of your plot';
-				break;
-			default:
-				$output = "===[plotcommands]===\n";
-				$output .= "/plot home - tp to your plot\n";
-				$output .= "/plot auto - claim a random free plot\n";
-				$output .= "/plot claim - claim the plot your standing in\n";
-				$output .= "/plot addmember - add a member to your plot\n";
-				$output .= "/plot removemember - remove a member from your plot\n";
 				break;
 		}
 		return $output;
+	}
+	
+	public function tpToPlot($plot, $player){
+		$middle = $this->config['PlotSize'] / 2;
+		$x = $plot['x1'] + $middle;
+		$z = $plot['z1'] + $middle;
+		$level = $plot['level'];
+		$player->teleport(new Position($x, 27, $z, $level));
 	}
 	
 	public function CreateNewWorld(){
@@ -336,31 +347,47 @@ class Plot implements Plugin{
 		$level->setSpawn(new Vector3($middle,27,$middle));
 		unset($level);
 		console('creating plotdata');
-		$this->plotsdata['plotworld1'] = $this->plottemplate;
-		$file = json_encode($this->plotsdata);
-		file_put_contents($this->path.'plots.data', $file);
+		foreach($this->plottemplate as $key => $val){
+			$sql = "INSERT INTO plots (pid, owner, helpers, x1, z1, x2, z2) VALUES ($key, , ".$val['pos1'][0].', '.$val['pos1'][1].', '.$val['pos2'][0].', '.$val['pos2'][1].')';
+			$this->database->exec($sql);
+		}
 		console('plot generated succesfully!');
 	}
 	
-	public function block($data){
-		if(isset($this->plotsdata[$data['target']->level->getName()]) and !$this->api->ban->isOp($data['player']->username)){
-			$iusername = $data['player']->iusername;
-			$x = $data['target']->x;
-			$z = $data['target']->z;
-			$plots = $this->plotsdata[$data['target']->level->getName()];
-			foreach($plots as $key => $val){
-				if($val['pos'][0][0] <= $x and $x <= $val['pos'][1][0] and $val['pos'][1][0] <= $z and $z <= $val['pos'][1][1]){
-					if($val['owner'] === $iusername or in_array($iusername, $plots['members'])){
-						return true;
-					}
-				}
+	public function getPlotByOwner($username){
+		$query = "SELECT * FROM plots WHERE owner = $username";
+		$result = $this->database->query($query);
+		if($result instanceof SQLite3Result){
+			while ($entry = $result->fetchArray()){
+				$finalresult[] = $entry;
 			}
-			$data['player']->sendChat("You can't build in this plot");
-			return false;
+		}else{
+			$finalresult = false;
 		}
+		return $finalresult;
+	}
+	
+	public function getPlotByPos($x, $y, $z, $level){
+		$query = "SELECT * FROM plots WHERE x1 <= $x AND x2 <= $x AND z1 <= $z AND z2 <= $z AND level = $level";
+		$result = $this->database->query($query);
+		if($result instanceof SQLite3Result){
+			$result = $result->fetchArray(SQLITE3_ASSOC);
+		}else{
+			$result = false;
+		}
+		return $result;
+	}
+	
+	public function block($data){
+		if($this->api->ban->isOp($data['player']->username)) return;
+		$iusername = $data['player']->iusername;
+		$plot = $this->getPlotByPos($data['target']->x, $data['target']->z, $data['target']->level->getName());
+		$plot = $plot[0];
+		if(($plot === false) or ($plot['owner'] == $iusername) or (in_array($iusername, explode(',',$plot['helpers'])))) return;
+		$data['player']->sendChat("You can't build in this plot");
+		return false;
 	}
 	
 	public function __destruct(){}
 
 }
-?>
