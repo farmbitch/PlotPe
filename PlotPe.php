@@ -195,7 +195,7 @@ class Plot implements Plugin{
 					break;
 				}
 				$plot = $plot[0];
-				if($plot['owner'] != ''){
+				if($plot['owner'] != NULL){
 					$output = "This plot is already claimed by somebody";
 					break;
 				}
@@ -222,12 +222,14 @@ class Plot implements Plugin{
 				break;
 				
 			case 'auto':
-				$plot = $this->getPlotByOwner('');
-				if($plot === false){
+				$query = "SELECT * FROM plots WHERE owner IS NULL";
+				$result = $this->database->query($query);
+				if($result instanceof SQLite3Result){
+					$plot = $result->fetchArray(SQLITE3_ASSOC);
+				}else{
 					$output = 'Their are no available plots anymore';
 					break;
 				}
-				$plot = $plot[0];
 				$id = $plot['id'];
 				$sql = "UPDATE plots SET owner = $iusername WHERE id = $id;";
 				$this->database->exec($sql);
@@ -306,6 +308,9 @@ class Plot implements Plugin{
 					$output = $player.' is no helper of this plot';
 				}
 				break;
+			default:
+				return false;
+				break;
 		}
 		return $output;
 	}
@@ -314,7 +319,7 @@ class Plot implements Plugin{
 		$middle = $this->config['PlotSize'] / 2;
 		$x = $plot['x1'] + $middle;
 		$z = $plot['z1'] + $middle;
-		$level = $plot['level'];
+		$level = $this->api->level->get($plot['level']);
 		$player->teleport(new Position($x, 27, $z, $level));
 	}
 	
@@ -358,7 +363,7 @@ class Plot implements Plugin{
 		$query = "SELECT * FROM plots WHERE owner = $username";
 		$result = $this->database->query($query);
 		if($result instanceof SQLite3Result){
-			while ($entry = $result->fetchArray()){
+			while ($entry = $result->fetchArray(SQLITE3_ASSOC)){
 				$finalresult[] = $entry;
 			}
 		}else{
@@ -388,6 +393,8 @@ class Plot implements Plugin{
 		return false;
 	}
 	
-	public function __destruct(){}
+	public function __destruct(){
+		$this->database->close();
+	}
 
 }
