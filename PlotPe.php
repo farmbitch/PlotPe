@@ -381,7 +381,7 @@ class Plot implements Plugin{
 	}
 	
 	public function getPlotByPos($x, $z, $level){
-		$sql = $this->database->prepare("SELECT * FROM plots WHERE x1 <= ? AND x2 <= ? AND z1 <= ? AND z2 <= ? AND level = ?");
+		$sql = $this->database->prepare("SELECT * FROM plots WHERE x1 <= ? AND x2 >= ? AND z1 <= ? AND z2 >= ? AND level = ?");
 		$result = $sql->execute(array($x, $x, $z, $z, $level))->fetchAll(SQLITE3_ASSOC);
 		$sql->close();
 		if(!isset($result[0])){
