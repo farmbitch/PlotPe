@@ -222,7 +222,6 @@ class Plot implements Plugin{
 					$output = "You don't have a plot, create one with /plot auto or /plot claim";
 					break;
 				}
-				$plot = $plot[0];
 				$id = 0;
 				if(isset($args[1]) and is_numeric($args[1])){
 					$id = $args[1] - 1;
@@ -233,19 +232,17 @@ class Plot implements Plugin{
 				
 			case 'auto':
 				$sql = $this->database->prepare("SELECT * FROM plots WHERE owner IS NULL");
-				$result = $sql->execute();
+				$result = $sql->execute()->fetchAll(SQLITE3_ASSOC);
 				$sql->close();
-				if($result instanceof SQLite3Result){
-					$plot = $result->fetchArray(SQLITE3_ASSOC);
-				}else{
+				if(!isset($result[0])){
 					$output = 'Their are no available plots anymore';
 					break;
 				}
 				$sql = $this->database->prepare("UPDATE plots SET owner = ? WHERE id = ?");
-				$sql->execute(array($iusername, $plot['id']));
+				$sql->execute(array($iusername, $result[0]['id']));
 				$sql->close();
-				$this->tpToPlot($plot, $issuer);
-				$output = 'You auto-claimed a plot with id:'.$plot['pid'].' in world:'.$level;
+				$this->tpToPlot($result[0], $issuer);
+				$output = 'You auto-claimed a plot with id:'.$result[0]['pid'].' in world:'.$result[0]['level'];
 				break;
 				
 			case 'list':
@@ -256,7 +253,7 @@ class Plot implements Plugin{
 				}
 				$output = '==========[Your Plots]==========';
 				foreach($plots as $key => $val){
-					$output .= ''.($key + 1).'. id:'.$val['pid'].' world:'.$val['level']."\n";
+					$output .= ' '.($key + 1).'. id:'.$val['pid'].' world:'.$val['level']."\n";
 				}
 				break;
 				
@@ -276,13 +273,13 @@ class Plot implements Plugin{
 					$output = "You're not the owner of this plot";
 					break;
 				}
-				if(in_array($player, explode(',',$plot['helpers']))){
-					$output = $player.' was already a helper of this plot';
-					break;
-				}
-				if($plot['helpers'] == ''){
+				if($plot['helpers'] == NULL){
 					$helpers = $player;
 				}else{
+					if(in_array($player, explode(',',$plot['helpers']))){
+						$output = $player.' was already a helper of this plot';
+						break;
+					}
 					$helpers = $plot['helpers'].','.$player;
 				}
 				$sql = $this->database->prepare("UPDATE plots SET helpers = ? WHERE id = ?");
@@ -364,35 +361,30 @@ class Plot implements Plugin{
 		unset($level);
 		console('creating plotdata');
 		$level = 'plotworld'.($this->numberofworlds);
+		$sql = $this->database->prepare("INSERT INTO plots (pid, x1, z1, x2, z2, level) VALUES (?, ?, ?, ?, ?, ?);");
 		foreach($this->plottemplate as $key => $val){
-			$sql = $this->database->prepare("INSERT INTO plots (pid, x1, z1, x2, z2, level) VALUES (?, ?, ?, ?, ?, ?)");
 			$sql->execute(array($key, $val['pos1'][0], $val['pos1'][1], $val['pos2'][0], $val['pos2'][1], $level));
-			$sql->close();
 		}
+		$sql->close();
 		console('plot generated succesfully!');
 	}
 	
 	public function getPlotByOwner($username){
 		$sql = $this->database->prepare("SELECT * FROM plots WHERE owner = ?");
-		$result = $sql->execute(array($username));
+		$result = $sql->execute(array($username))->fetchAll(SQLITE3_ASSOC);
 		$sql->close();
-		if($result instanceof SQLite3Result){
-			while ($entry = $result->fetchArray(SQLITE3_ASSOC)){
-				$finalresult[] = $entry;
-			}
-		}else{
-			$finalresult = false;
+		$i = 0;
+		if(!isset($result[0])){
+			$result = false;
 		}
-		return $finalresult;
+		return $result;
 	}
 	
-	public function getPlotByPos($x, $y, $z, $level){
+	public function getPlotByPos($x, $z, $level){
 		$sql = $this->database->prepare("SELECT * FROM plots WHERE x1 <= ? AND x2 <= ? AND z1 <= ? AND z2 <= ? AND level = ?");
-		$result = $sql->execute(array($x, $y, $z, $level));
+		$result = $sql->execute(array($x, $x, $z, $z, $level))->fetchAll(SQLITE3_ASSOC);
 		$sql->close();
-		if($result instanceof SQLite3Result){
-			$result = $result->fetchArray(SQLITE3_ASSOC);
-		}else{
+		if(!isset($result[0])){
 			$result = false;
 		}
 		return $result;
